@@ -1,0 +1,5 @@
+{
+  "name": "PulseReader AI",
+  "description": "A modern, AI-powered RSS news aggregator. Aggregate your favorite feeds, read articles in a distraction-free environment, and get instant AI summaries powered by Gemini.",
+  "requestFramePermissions": []
+}
