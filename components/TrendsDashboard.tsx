@@ -10,9 +10,25 @@ interface TrendsDashboardProps {
     onArticleClick: (article: Article) => void;
 }
 
+// Extended interface for the dashboard view
+interface TrendingStory extends Article {
+    relatedCount: number;
+    sources: string[];
+}
+
+// Words that are too generic to assume same-story merely by overlap
+const GENERIC_TOPIC_WORDS = new Set([
+    'india', 'indian', 'delhi', 'mumbai', 'government', 'govt', 'state', 'center', 'centre',
+    'police', 'court', 'high', 'supreme', 'minister', 'chief', 'prime', 'modi', 
+    'bjp', 'congress', 'party', 'leader', 'official', 'report', 'video', 'watch',
+    'woman', 'man', 'people', 'case', 'death', 'arrest', 'world', 'cricket', 'team',
+    'market', 'price', 'gold', 'stock', 'today', 'live', 'update', 'news', 'latest'
+]);
+
 const TrendsDashboard: React.FC<TrendsDashboardProps> = ({ articles, onArticleClick }) => {
     const [trendTopics, setTrendTopics] = useState<TrendTopic[]>([]);
     const [recentTrendTopics, setRecentTrendTopics] = useState<TrendTopic[]>([]);
+    const [trendingStories, setTrendingStories] = useState<TrendingStory[]>([]);
     const [selectedKeyword, setSelectedKeyword] = useState<string | null>(null);
     const [aiReport, setAiReport] = useState<TrendReport[] | null>(null);
     const [aiKeywords, setAiKeywords] = useState<string[]>([]);
@@ -22,18 +38,20 @@ const TrendsDashboard: React.FC<TrendsDashboardProps> = ({ articles, onArticleCl
     useEffect(() => {
         if (articles.length === 0) return;
 
+        // Helper to extract tokens from a string
+        const getTokens = (text: string) => {
+            return new Set(text.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w)));
+        };
+
+        // 1. Calculate Keyword Trends
         const calculateTrends = (sourceArticles: Article[]) => {
             const words: Record<string, { count: number; articles: Article[] }> = {};
 
             sourceArticles.forEach(article => {
-                // Combine title and snippet for analysis
                 const text = `${article.title} ${article.contentSnippet || ''}`.toLowerCase();
-                // Remove special characters and split
-                const tokens = text.replace(/[^\w\s]/g, '').split(/\s+/);
+                const tokens = new Set(text.replace(/[^\w\s]/g, '').split(/\s+/));
 
-                const uniqueTokensInArticle = new Set(tokens); // Count a word only once per article to measure spread
-
-                uniqueTokensInArticle.forEach(token => {
+                tokens.forEach(token => {
                     if (token.length > 2 && !STOP_WORDS.has(token) && isNaN(Number(token))) {
                         if (!words[token]) {
                             words[token] = { count: 0, articles: [] };
@@ -44,7 +62,6 @@ const TrendsDashboard: React.FC<TrendsDashboardProps> = ({ articles, onArticleCl
                 });
             });
 
-            // Convert to array and sort
             return Object.entries(words)
                 .map(([keyword, data]) => ({
                     keyword: keyword.charAt(0).toUpperCase() + keyword.slice(1),
@@ -52,38 +69,135 @@ const TrendsDashboard: React.FC<TrendsDashboardProps> = ({ articles, onArticleCl
                     relatedArticles: data.articles
                 }))
                 .sort((a, b) => b.count - a.count)
-                .slice(0, 30); // Top 30 keywords
+                .slice(0, 30);
         };
 
-        // 1. All Time Trends (based on all loaded articles)
         setTrendTopics(calculateTrends(articles));
 
         // 2. Recent Trends (Past 1 Hour)
         const now = new Date();
         const oneHourAgo = new Date(now.getTime() - (60 * 60 * 1000));
-        
         const recentArticles = articles.filter(a => {
-            // Use isoDate if available, otherwise assume current time if missing (fallback)
             const pubDate = a.isoDate ? new Date(a.isoDate) : new Date();
             return pubDate >= oneHourAgo;
         });
-
         setRecentTrendTopics(calculateTrends(recentArticles));
+
+        // 3. Calculate Trending Stories (Clustering "Repeated" Articles)
+        const calculateTrendingStories = (sourceArticles: Article[]) => {
+            const processed = new Set<string>();
+            const clusters: { articles: Article[], tokens: Set<string> }[] = [];
+
+            // Sort by date desc to get latest version of story as representative
+            const sorted = [...sourceArticles].sort((a, b) => new Date(b.isoDate).getTime() - new Date(a.isoDate).getTime());
+
+            sorted.forEach(article => {
+                if (processed.has(article.id)) return;
+
+                const tokens = getTokens(article.title);
+                if (tokens.size < 3) return; // Skip very short titles/tokens
+
+                const cluster = [article];
+                processed.add(article.id);
+
+                // Look for matches in remaining articles
+                sorted.forEach(other => {
+                    if (processed.has(other.id)) return;
+                    const otherTokens = getTokens(other.title);
+                    
+                    // Count intersection of significant words
+                    let intersection = 0;
+                    tokens.forEach(t => { if (otherTokens.has(t)) intersection++; });
+
+                    // Heuristic: If they share at least 2 significant words, they are likely about the same event
+                    if (intersection >= 2) {
+                        cluster.push(other);
+                        processed.add(other.id);
+                    }
+                });
+
+                // Only consider it a "Trending Story" if multiple sources/articles cover it
+                if (cluster.length >= 2) {
+                    clusters.push({ articles: cluster, tokens });
+                }
+            });
+
+            // Sort clusters by size (popularity)
+            let topClusters = clusters.sort((a, b) => b.articles.length - a.articles.length);
+
+            // POST-PROCESSING: Deduplicate topics in the final list
+            const uniqueTopics: typeof topClusters = [];
+            
+            for (const cluster of topClusters) {
+                const clusterTokens = cluster.tokens;
+                
+                // Check if this cluster's subject is already covered by a selected cluster
+                const isDuplicateTopic = uniqueTopics.some(selected => {
+                    let intersection = 0;
+                    let hasSignificantOverlap = false;
+
+                    clusterTokens.forEach(t => { 
+                        if (selected.tokens.has(t)) {
+                            intersection++;
+                            if (!GENERIC_TOPIC_WORDS.has(t)) {
+                                hasSignificantOverlap = true;
+                            }
+                        } 
+                    });
+                    
+                    return hasSignificantOverlap || intersection >= 3; 
+                });
+
+                if (!isDuplicateTopic) {
+                    uniqueTopics.push(cluster);
+                }
+                
+                if (uniqueTopics.length >= 4) break;
+            }
+
+            return uniqueTopics.map(c => {
+                // Find best image in the entire cluster to represent the story
+                // Priority: GIF > Any Image > Representative's Image
+                let bestThumbnail = '';
+                let foundGif = false;
+
+                for (const a of c.articles) {
+                    if (a.thumbnail) {
+                        // If we find a GIF, we prefer it immediately and stop searching (or just set flag)
+                        if (a.thumbnail.toLowerCase().endsWith('.gif')) {
+                            bestThumbnail = a.thumbnail;
+                            foundGif = true;
+                            break; 
+                        }
+                        // Otherwise, take the first valid non-empty thumbnail we find
+                        if (!bestThumbnail) {
+                            bestThumbnail = a.thumbnail;
+                        }
+                    }
+                }
+
+                const representative = c.articles[0];
+                return {
+                    ...representative,
+                    thumbnail: bestThumbnail || representative.thumbnail, // Override thumbnail
+                    relatedCount: c.articles.length,
+                    sources: Array.from(new Set(c.articles.map(a => a.feedTitle))).slice(0, 3)
+                };
+            });
+        };
+
+        setTrendingStories(calculateTrendingStories(articles));
 
     }, [articles]);
 
     const handleGenerateAiReport = async () => {
         setLoadingAi(true);
         try {
-            // Send top 80 titles
             const titles = articles.slice(0, 80).map(a => a.title);
-            
-            // Run both report generation and keyword extraction in parallel
             const [report, keywords] = await Promise.all([
                 generateTrendReport(titles),
                 generateTrendingKeywords(titles)
             ]);
-            
             setAiReport(report);
             setAiKeywords(keywords);
         } catch (e) {
@@ -93,7 +207,6 @@ const TrendsDashboard: React.FC<TrendsDashboardProps> = ({ articles, onArticleCl
         }
     };
 
-    // Filter articles based on selected keyword (either local or AI)
     const filteredArticles = useMemo(() => {
         if (!selectedKeyword) return [];
         const lowerKey = selectedKeyword.toLowerCase();
@@ -109,6 +222,40 @@ const TrendsDashboard: React.FC<TrendsDashboardProps> = ({ articles, onArticleCl
                 <h2 className="text-2xl font-bold text-gray-900">Trends & Insights</h2>
                 <p className="text-gray-500">Analyze the pulse of the news with keyword frequency and AI insights.</p>
             </header>
+
+            {/* Trending Articles Section (Most Repeated) */}
+            {trendingStories.length > 0 && (
+                <section className="mb-10 animate-fade-in">
+                    <div className="flex items-center mb-6">
+                        <div className="p-2 bg-orange-100 rounded-lg mr-3">
+                            <svg className="w-6 h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-bold text-gray-900">Trending Articles of the Day</h3>
+                            <p className="text-sm text-gray-500">Top stories covered by multiple sources today</p>
+                        </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                        {trendingStories.map((story) => (
+                            <div key={story.id} className="relative group">
+                                <div className="absolute top-0 right-0 z-10 -mt-2 -mr-2 bg-gradient-to-r from-orange-500 to-red-500 text-white text-xs font-bold px-2.5 py-1 rounded-full shadow-lg border-2 border-white transform transition-transform group-hover:scale-110">
+                                    {story.relatedCount} Sources
+                                </div>
+                                <ArticleCard 
+                                    article={story} 
+                                    onClick={onArticleClick} 
+                                />
+                                <div className="mt-2 px-1">
+                                    <p className="text-xs text-gray-400">
+                                        Also reported by: {story.sources.filter(s => s !== story.feedTitle).join(', ')} {story.relatedCount > story.sources.length ? '...' : ''}
+                                    </p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </section>
+            )}
 
             {/* AI Insight Section */}
             <section className="mb-10 bg-white rounded-xl p-6 shadow-sm border border-gray-200">

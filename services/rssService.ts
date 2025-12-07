@@ -64,8 +64,41 @@ const stripHtml = (html: string) => {
 
 const extractImageFromContent = (content: string): string => {
     if (!content) return "";
-    const match = content.match(/<img[^>]+src="([^">]+)"/);
-    return match ? match[1] : '';
+    
+    // Find all image sources
+    const imgRex = /<img[^>]+src="([^">]+)"/g;
+    const images: string[] = [];
+    let match;
+    while ((match = imgRex.exec(content)) !== null) {
+        images.push(match[1]);
+    }
+
+    // Filter out known bad images (trackers, ads)
+    const validImages = images.filter(url => {
+        const lower = url.toLowerCase();
+        // Skip common tracking pixels and ad servers
+        if (
+            lower.includes('feedburner') || 
+            lower.includes('doubleclick') || 
+            lower.includes('/ad/') || 
+            lower.includes('ads.') ||
+            lower.includes('pixel') || 
+            lower.includes('emoji') ||
+            lower.includes('smilies')
+        ) {
+            return false;
+        }
+        return true;
+    });
+
+    if (validImages.length === 0) return "";
+
+    // Priority 1: Prefer GIFs if user requested
+    const gif = validImages.find(img => img.toLowerCase().endsWith('.gif'));
+    if (gif) return gif;
+
+    // Priority 2: Return first valid image
+    return validImages[0];
 }
 
 export const fetchFeed = async (feed: Feed): Promise<Article[]> => {
@@ -132,33 +165,47 @@ export const fetchFeed = async (feed: Feed): Promise<Article[]> => {
                  const url = mediaContent[i].getAttribute('url');
                  if (url && (!type || type.startsWith('image'))) {
                      thumbnail = url;
-                     break;
+                     // Prefer GIFs immediately if found here
+                     if (url.toLowerCase().endsWith('.gif')) break;
                  }
               }
           }
 
           // 2. Check Enclosure
-          if (!thumbnail) {
+          if (!thumbnail || !thumbnail.toLowerCase().endsWith('.gif')) {
               const enclosure = item.querySelector('enclosure');
               if (enclosure) {
                   const type = enclosure.getAttribute('type');
                   if (type && type.startsWith('image')) {
-                      thumbnail = enclosure.getAttribute('url') || '';
+                      const encUrl = enclosure.getAttribute('url') || '';
+                      // If we already have a thumbnail, only overwrite if this is a GIF (preference)
+                      if (!thumbnail || encUrl.toLowerCase().endsWith('.gif')) {
+                          thumbnail = encUrl;
+                      }
                   }
               }
           }
           
           // 3. Check Media Thumbnail
-          if (!thumbnail) {
+          if (!thumbnail || !thumbnail.toLowerCase().endsWith('.gif')) {
               const mediaThumbnail = item.getElementsByTagNameNS('*', 'thumbnail')[0];
               if (mediaThumbnail) {
-                  thumbnail = mediaThumbnail.getAttribute('url') || '';
+                  const thumbUrl = mediaThumbnail.getAttribute('url') || '';
+                  if (!thumbnail || thumbUrl.toLowerCase().endsWith('.gif')) {
+                      thumbnail = thumbUrl;
+                  }
               }
           }
 
-          // 4. Fallback: Parse HTML for first image
-          if (!thumbnail) {
-              thumbnail = extractImageFromContent(content || description);
+          // 4. Fallback: Parse HTML for first image (Prioritize GIF if inside content)
+          if (!thumbnail || !thumbnail.toLowerCase().endsWith('.gif')) {
+              const contentImage = extractImageFromContent(content || description);
+              if (contentImage) {
+                   // If we already have a static image but content has a GIF, take the GIF
+                   if (!thumbnail || contentImage.toLowerCase().endsWith('.gif')) {
+                       thumbnail = contentImage;
+                   }
+              }
           }
 
           const cleanSnippet = stripHtml(description || content);
