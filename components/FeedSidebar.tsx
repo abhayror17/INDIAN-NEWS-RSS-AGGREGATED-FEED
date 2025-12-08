@@ -41,22 +41,22 @@ const FeedSidebar: React.FC<FeedSidebarProps> = ({
         ${isOpen ? 'translate-x-0' : '-translate-x-full'}
         md:translate-x-0 md:static md:h-screen md:sticky md:top-0 flex flex-col
       `}>
-        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+        <div className="p-6 border-b border-gray-100 flex flex-col items-center justify-center relative">
             {/* Logo */}
-            <div className="flex items-center justify-center w-full">
+            <div className="w-full flex items-center justify-center py-2">
                 <img 
                     src="https://raw.githubusercontent.com/LGPSM-Solutions/LGPSM-Solutions/main/LGPSM%20LOGO%20FINAL%20.png" 
                     alt="LGPSM Solutions" 
-                    className="h-16 w-auto object-contain" 
+                    className="h-20 w-auto object-contain transition-transform duration-300 hover:scale-105" 
                     onError={(e) => {
                         // Fallback if image fails or is transparent on white
                         e.currentTarget.style.display = 'none';
                         e.currentTarget.parentElement!.innerText = 'LGPSM Solutions';
-                        e.currentTarget.parentElement!.className = 'text-xl font-bold text-blue-700';
+                        e.currentTarget.parentElement!.className = 'text-xl font-bold text-blue-700 text-center';
                     }}
                 />
             </div>
-            <button onClick={onClose} className="md:hidden text-gray-500 absolute right-4">
+            <button onClick={onClose} className="md:hidden text-gray-400 hover:text-gray-600 absolute right-4 top-4">
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
         </div>
