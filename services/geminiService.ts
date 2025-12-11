@@ -137,7 +137,8 @@ export const generatePersonalityAnalysis = async (titles: string[]): Promise<Per
       - 'name': The person's name.
       - 'role': Their primary role (e.g., 'Prime Minister', 'Actor').
       - 'context': A very short phrase (max 6 words) explaining why they are in the news.
-      - 'sentiment': The general sentiment around them in these news (Positive, Neutral, Negative).`,
+      - 'sentiment': The general sentiment around them in these news (Positive, Neutral, Negative).
+      - 'imageUrl': A direct URL to a publicly available image of this person (e.g. from Wikimedia Commons). If unknown, return empty string.`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -148,9 +149,10 @@ export const generatePersonalityAnalysis = async (titles: string[]): Promise<Per
               name: { type: Type.STRING },
               role: { type: Type.STRING },
               context: { type: Type.STRING },
-              sentiment: { type: Type.STRING, enum: ["Positive", "Neutral", "Negative"] }
+              sentiment: { type: Type.STRING, enum: ["Positive", "Neutral", "Negative"] },
+              imageUrl: { type: Type.STRING }
             },
-            required: ["name", "role", "context", "sentiment"]
+            required: ["name", "role", "context", "sentiment", "imageUrl"]
           }
         }
       }

@@ -50,6 +50,7 @@ export interface PersonalityTrend {
   role: string;
   sentiment: 'Positive' | 'Neutral' | 'Negative';
   context: string;
+  imageUrl?: string;
 }
 
 export interface SentimentTrendPoint {

@@ -396,9 +396,24 @@ const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ articles }) => 
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                                 {personalities.map((person, idx) => (
                                     <div key={idx} className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm flex flex-col items-center text-center relative overflow-hidden group">
-                                        <div className="w-16 h-16 bg-gradient-to-br from-gray-100 to-gray-200 rounded-full flex items-center justify-center text-gray-500 font-bold text-2xl mb-4 shadow-inner">
-                                            {person.name.charAt(0)}
+                                        {/* Image or Fallback Initials */}
+                                        <div className="w-16 h-16 mb-4 relative flex justify-center">
+                                            {person.imageUrl ? (
+                                                <img 
+                                                    src={person.imageUrl} 
+                                                    alt={person.name} 
+                                                    className="w-16 h-16 rounded-full object-cover shadow-md"
+                                                    onError={(e) => {
+                                                        e.currentTarget.style.display = 'none';
+                                                        e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                                                    }} 
+                                                />
+                                            ) : null}
+                                            <div className={`w-16 h-16 bg-gradient-to-br from-gray-100 to-gray-200 rounded-full flex items-center justify-center text-gray-500 font-bold text-2xl shadow-inner ${person.imageUrl ? 'hidden' : ''}`}>
+                                                {person.name.charAt(0)}
+                                            </div>
                                         </div>
+                                        
                                         <h5 className="font-bold text-gray-900 text-lg">{person.name}</h5>
                                         <span className="text-xs text-gray-500 uppercase tracking-wider mb-3">{person.role}</span>
                                         <p className="text-sm text-gray-600 italic mb-4 line-clamp-2">"{person.context}"</p>
