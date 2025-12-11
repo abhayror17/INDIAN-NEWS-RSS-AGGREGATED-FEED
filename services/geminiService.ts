@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { GeminiSummaryResponse, TrendReport } from "../types";
+import { GeminiSummaryResponse, TrendReport, PersonalityTrend, SentimentTrendPoint, CategoryTrend, TopicCluster, LocationData } from "../types";
 
 // Initialize Gemini Client
 // Note: API Key comes from process.env.API_KEY as per instructions
@@ -120,5 +120,188 @@ export const generateTrendingKeywords = async (titles: string[]): Promise<string
   } catch (error) {
       console.error("Gemini Keyword Extraction Error:", error);
       return [];
+  }
+};
+
+export const generatePersonalityAnalysis = async (titles: string[]): Promise<PersonalityTrend[]> => {
+  try {
+    const joinedTitles = titles.slice(0, 100).join("\n- ");
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `Identify the top 4-6 famous personalities (politicians, business leaders, celebrities, sports stars) mentioned in these headlines.
+      
+      Headlines:
+      - ${joinedTitles}
+      
+      Return a JSON array where each object has:
+      - 'name': The person's name.
+      - 'role': Their primary role (e.g., 'Prime Minister', 'Actor').
+      - 'context': A very short phrase (max 6 words) explaining why they are in the news.
+      - 'sentiment': The general sentiment around them in these news (Positive, Neutral, Negative).`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              role: { type: Type.STRING },
+              context: { type: Type.STRING },
+              sentiment: { type: Type.STRING, enum: ["Positive", "Neutral", "Negative"] }
+            },
+            required: ["name", "role", "context", "sentiment"]
+          }
+        }
+      }
+    });
+    if (response.text) return JSON.parse(response.text) as PersonalityTrend[];
+    return [];
+  } catch (error) {
+    console.error("Gemini Personality Error", error);
+    return [];
+  }
+};
+
+export const generateSentimentTimeline = async (titlesWithTime: string[]): Promise<SentimentTrendPoint[]> => {
+  try {
+    const joinedData = titlesWithTime.slice(0, 100).join("\n");
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `Analyze the sentiment of these news headlines over time.
+      
+      Data (Time - Headline):
+      ${joinedData}
+      
+      1. Divide the time range covered by these articles into 5 equal chronological intervals (e.g. morning, afternoon, or specific dates if range is large).
+      2. For each interval, calculate the approximate percentage of Positive, Neutral, and Negative headlines.
+      3. Create a short 'timeLabel' for each interval (e.g., "9 AM", "Mon", "Jan").
+      
+      Return a JSON array.`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              timeLabel: { type: Type.STRING },
+              positive: { type: Type.NUMBER },
+              neutral: { type: Type.NUMBER },
+              negative: { type: Type.NUMBER }
+            },
+            required: ["timeLabel", "positive", "neutral", "negative"]
+          }
+        }
+      }
+    });
+    if (response.text) return JSON.parse(response.text) as SentimentTrendPoint[];
+    return [];
+  } catch (error) {
+    console.error("Gemini Sentiment Timeline Error", error);
+    return [];
+  }
+};
+
+export const generateCategoryAnalysis = async (titles: string[]): Promise<CategoryTrend[]> => {
+  try {
+    const joinedTitles = titles.slice(0, 100).join("\n- ");
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `Categorize the following news headlines into these 6 genres: News (General/National), Politics, Sports, Business, Technology, Entertainment.
+      
+      Headlines:
+      - ${joinedTitles}
+      
+      Return a count of articles for each category in a JSON array.`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              category: { type: Type.STRING, enum: ["News", "Politics", "Sports", "Business", "Technology", "Entertainment"] },
+              count: { type: Type.NUMBER }
+            },
+            required: ["category", "count"]
+          }
+        }
+      }
+    });
+    if (response.text) return JSON.parse(response.text) as CategoryTrend[];
+    return [];
+  } catch (error) {
+    console.error("Gemini Category Analysis Error", error);
+    return [];
+  }
+};
+
+export const generateTopicClusters = async (titles: string[]): Promise<TopicCluster[]> => {
+  try {
+    const joinedTitles = titles.slice(0, 100).join("\n- ");
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `Group these news headlines into distinct semantic topic clusters (e.g., "Cricket", "Stock Market", "State Elections", "International Conflict").
+      
+      Headlines:
+      - ${joinedTitles}
+      
+      Return a JSON array of objects with 'topic' and 'count' (number of headlines in that cluster). Limit to top 8 clusters.`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              topic: { type: Type.STRING },
+              count: { type: Type.NUMBER }
+            },
+            required: ["topic", "count"]
+          }
+        }
+      }
+    });
+    if (response.text) return JSON.parse(response.text) as TopicCluster[];
+    return [];
+  } catch (error) {
+    console.error("Gemini Topic Cluster Error", error);
+    return [];
+  }
+};
+
+export const generateLocationAnalysis = async (titles: string[]): Promise<LocationData[]> => {
+  try {
+    const joinedTitles = titles.slice(0, 100).join("\n- ");
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `Extract the geographical locations (cities, states, countries) mentioned in these headlines and count their occurrences.
+      Ignore generic terms like "India" if specific cities/states are available. Focus on specific hotspots.
+      
+      Headlines:
+      - ${joinedTitles}
+      
+      Return a JSON array of objects with 'location' and 'count'. Return top 12 locations.`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              location: { type: Type.STRING },
+              count: { type: Type.NUMBER }
+            },
+            required: ["location", "count"]
+          }
+        }
+      }
+    });
+    if (response.text) return JSON.parse(response.text) as LocationData[];
+    return [];
+  } catch (error) {
+    console.error("Gemini Location Analysis Error", error);
+    return [];
   }
 };

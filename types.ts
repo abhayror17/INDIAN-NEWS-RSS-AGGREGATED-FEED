@@ -44,3 +44,32 @@ export interface TrendReport {
     description: string;
     keyThemes: string[];
 }
+
+export interface PersonalityTrend {
+  name: string;
+  role: string;
+  sentiment: 'Positive' | 'Neutral' | 'Negative';
+  context: string;
+}
+
+export interface SentimentTrendPoint {
+  timeLabel: string;
+  positive: number;
+  neutral: number;
+  negative: number;
+}
+
+export interface CategoryTrend {
+  category: string;
+  count: number;
+}
+
+export interface TopicCluster {
+  topic: string;
+  count: number;
+}
+
+export interface LocationData {
+  location: string;
+  count: number;
+}

@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Article, TrendTopic, TrendReport } from '../types';
+import { Article, TrendTopic, TrendReport, PersonalityTrend, SentimentTrendPoint } from '../types';
 import { STOP_WORDS } from '../constants';
-import { generateTrendReport, generateTrendingKeywords } from '../services/geminiService';
+import { generateTrendReport, generateTrendingKeywords, generatePersonalityAnalysis, generateSentimentTimeline } from '../services/geminiService';
 import ArticleCard from './ArticleCard';
 
 interface TrendsDashboardProps {
@@ -10,38 +10,20 @@ interface TrendsDashboardProps {
     onArticleClick: (article: Article) => void;
 }
 
-// Extended interface for the dashboard view
-interface TrendingStory extends Article {
-    relatedCount: number;
-    sources: string[];
-}
-
-// Words that are too generic to assume same-story merely by overlap
-const GENERIC_TOPIC_WORDS = new Set([
-    'india', 'indian', 'delhi', 'mumbai', 'government', 'govt', 'state', 'center', 'centre',
-    'police', 'court', 'high', 'supreme', 'minister', 'chief', 'prime', 'modi', 
-    'bjp', 'congress', 'party', 'leader', 'official', 'report', 'video', 'watch',
-    'woman', 'man', 'people', 'case', 'death', 'arrest', 'world', 'cricket', 'team',
-    'market', 'price', 'gold', 'stock', 'today', 'live', 'update', 'news', 'latest'
-]);
-
 const TrendsDashboard: React.FC<TrendsDashboardProps> = ({ articles, onArticleClick }) => {
     const [trendTopics, setTrendTopics] = useState<TrendTopic[]>([]);
-    const [recentTrendTopics, setRecentTrendTopics] = useState<TrendTopic[]>([]);
-    const [trendingStories, setTrendingStories] = useState<TrendingStory[]>([]);
     const [selectedKeyword, setSelectedKeyword] = useState<string | null>(null);
+    
+    // AI Data States
     const [aiReport, setAiReport] = useState<TrendReport[] | null>(null);
     const [aiKeywords, setAiKeywords] = useState<string[]>([]);
+    const [personalities, setPersonalities] = useState<PersonalityTrend[]>([]);
+    const [sentimentTimeline, setSentimentTimeline] = useState<SentimentTrendPoint[]>([]);
     const [loadingAi, setLoadingAi] = useState(false);
 
     // Calculate trends locally on mount or when articles change
     useEffect(() => {
         if (articles.length === 0) return;
-
-        // Helper to extract tokens from a string
-        const getTokens = (text: string) => {
-            return new Set(text.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w)));
-        };
 
         // 1. Calculate Keyword Trends
         const calculateTrends = (sourceArticles: Article[]) => {
@@ -74,132 +56,30 @@ const TrendsDashboard: React.FC<TrendsDashboardProps> = ({ articles, onArticleCl
 
         setTrendTopics(calculateTrends(articles));
 
-        // 2. Recent Trends (Past 1 Hour)
-        const now = new Date();
-        const oneHourAgo = new Date(now.getTime() - (60 * 60 * 1000));
-        const recentArticles = articles.filter(a => {
-            const pubDate = a.isoDate ? new Date(a.isoDate) : new Date();
-            return pubDate >= oneHourAgo;
-        });
-        setRecentTrendTopics(calculateTrends(recentArticles));
-
-        // 3. Calculate Trending Stories (Clustering "Repeated" Articles)
-        const calculateTrendingStories = (sourceArticles: Article[]) => {
-            const processed = new Set<string>();
-            const clusters: { articles: Article[], tokens: Set<string> }[] = [];
-
-            // Sort by date desc to get latest version of story as representative
-            const sorted = [...sourceArticles].sort((a, b) => new Date(b.isoDate).getTime() - new Date(a.isoDate).getTime());
-
-            sorted.forEach(article => {
-                if (processed.has(article.id)) return;
-
-                const tokens = getTokens(article.title);
-                if (tokens.size < 3) return; // Skip very short titles/tokens
-
-                const cluster = [article];
-                processed.add(article.id);
-
-                // Look for matches in remaining articles
-                sorted.forEach(other => {
-                    if (processed.has(other.id)) return;
-                    const otherTokens = getTokens(other.title);
-                    
-                    // Count intersection of significant words
-                    let intersection = 0;
-                    tokens.forEach(t => { if (otherTokens.has(t)) intersection++; });
-
-                    // Heuristic: If they share at least 2 significant words, they are likely about the same event
-                    if (intersection >= 2) {
-                        cluster.push(other);
-                        processed.add(other.id);
-                    }
-                });
-
-                // Only consider it a "Trending Story" if multiple sources/articles cover it
-                if (cluster.length >= 2) {
-                    clusters.push({ articles: cluster, tokens });
-                }
-            });
-
-            // Sort clusters by size (popularity)
-            let topClusters = clusters.sort((a, b) => b.articles.length - a.articles.length);
-
-            // POST-PROCESSING: Deduplicate topics in the final list
-            const uniqueTopics: typeof topClusters = [];
-            
-            for (const cluster of topClusters) {
-                const clusterTokens = cluster.tokens;
-                
-                // Check if this cluster's subject is already covered by a selected cluster
-                const isDuplicateTopic = uniqueTopics.some(selected => {
-                    let intersection = 0;
-                    let hasSignificantOverlap = false;
-
-                    clusterTokens.forEach(t => { 
-                        if (selected.tokens.has(t)) {
-                            intersection++;
-                            if (!GENERIC_TOPIC_WORDS.has(t)) {
-                                hasSignificantOverlap = true;
-                            }
-                        } 
-                    });
-                    
-                    return hasSignificantOverlap || intersection >= 3; 
-                });
-
-                if (!isDuplicateTopic) {
-                    uniqueTopics.push(cluster);
-                }
-                
-                if (uniqueTopics.length >= 4) break;
-            }
-
-            return uniqueTopics.map(c => {
-                // Find best image in the entire cluster to represent the story
-                // Priority: GIF > Any Image > Representative's Image
-                let bestThumbnail = '';
-                let foundGif = false;
-
-                for (const a of c.articles) {
-                    if (a.thumbnail) {
-                        // If we find a GIF, we prefer it immediately and stop searching (or just set flag)
-                        if (a.thumbnail.toLowerCase().endsWith('.gif')) {
-                            bestThumbnail = a.thumbnail;
-                            foundGif = true;
-                            break; 
-                        }
-                        // Otherwise, take the first valid non-empty thumbnail we find
-                        if (!bestThumbnail) {
-                            bestThumbnail = a.thumbnail;
-                        }
-                    }
-                }
-
-                const representative = c.articles[0];
-                return {
-                    ...representative,
-                    thumbnail: bestThumbnail || representative.thumbnail, // Override thumbnail
-                    relatedCount: c.articles.length,
-                    sources: Array.from(new Set(c.articles.map(a => a.feedTitle))).slice(0, 3)
-                };
-            });
-        };
-
-        setTrendingStories(calculateTrendingStories(articles));
-
     }, [articles]);
 
     const handleGenerateAiReport = async () => {
         setLoadingAi(true);
         try {
-            const titles = articles.slice(0, 80).map(a => a.title);
-            const [report, keywords] = await Promise.all([
+            const latestArticles = articles.slice(0, 80);
+            const titles = latestArticles.map(a => a.title);
+            const timedTitles = latestArticles.map(a => {
+                const date = new Date(a.isoDate);
+                const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', day: 'numeric' });
+                return `[${timeStr}] ${a.title}`;
+            });
+
+            const [report, keywords, people, timeline] = await Promise.all([
                 generateTrendReport(titles),
-                generateTrendingKeywords(titles)
+                generateTrendingKeywords(titles),
+                generatePersonalityAnalysis(titles),
+                generateSentimentTimeline(timedTitles)
             ]);
+
             setAiReport(report);
             setAiKeywords(keywords);
+            setPersonalities(people);
+            setSentimentTimeline(timeline);
         } catch (e) {
             console.error(e);
         } finally {
@@ -223,40 +103,6 @@ const TrendsDashboard: React.FC<TrendsDashboardProps> = ({ articles, onArticleCl
                 <p className="text-gray-500">Analyze the pulse of the news with keyword frequency and AI insights.</p>
             </header>
 
-            {/* Trending Articles Section (Most Repeated) */}
-            {trendingStories.length > 0 && (
-                <section className="mb-10 animate-fade-in">
-                    <div className="flex items-center mb-6">
-                        <div className="p-2 bg-orange-100 rounded-lg mr-3">
-                            <svg className="w-6 h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                        </div>
-                        <div>
-                            <h3 className="text-lg font-bold text-gray-900">Trending Articles of the Day</h3>
-                            <p className="text-sm text-gray-500">Top stories covered by multiple sources today</p>
-                        </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                        {trendingStories.map((story) => (
-                            <div key={story.id} className="relative group">
-                                <div className="absolute top-0 right-0 z-10 -mt-2 -mr-2 bg-gradient-to-r from-orange-500 to-red-500 text-white text-xs font-bold px-2.5 py-1 rounded-full shadow-lg border-2 border-white transform transition-transform group-hover:scale-110">
-                                    {story.relatedCount} Sources
-                                </div>
-                                <ArticleCard 
-                                    article={story} 
-                                    onClick={onArticleClick} 
-                                />
-                                <div className="mt-2 px-1">
-                                    <p className="text-xs text-gray-400">
-                                        Also reported by: {story.sources.filter(s => s !== story.feedTitle).join(', ')} {story.relatedCount > story.sources.length ? '...' : ''}
-                                    </p>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </section>
-            )}
-
             {/* AI Insight Section */}
             <section className="mb-10 bg-white rounded-xl p-6 shadow-sm border border-gray-200">
                 <div className="flex items-center justify-between mb-6">
@@ -265,8 +111,8 @@ const TrendsDashboard: React.FC<TrendsDashboardProps> = ({ articles, onArticleCl
                             <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                         </div>
                         <div>
-                            <h3 className="text-lg font-bold text-gray-900">AI Daily Briefing & Keywords</h3>
-                            <p className="text-sm text-gray-500">Generative summary and smart keyword extraction</p>
+                            <h3 className="text-lg font-bold text-gray-900">AI Daily Briefing & Intelligence</h3>
+                            <p className="text-sm text-gray-500">Generative report, personality tracking, and sentiment analysis</p>
                         </div>
                     </div>
                     {!aiReport && (
@@ -288,65 +134,91 @@ const TrendsDashboard: React.FC<TrendsDashboardProps> = ({ articles, onArticleCl
                 </div>
 
                 {aiReport ? (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        {aiReport.map((topic, idx) => (
-                            <div key={idx} className="p-4 bg-gray-50 rounded-lg border border-gray-100 hover:border-purple-200 transition-colors">
-                                <h4 className="font-bold text-gray-800 mb-2">{topic.mainTopic}</h4>
-                                <p className="text-sm text-gray-600 mb-3 leading-relaxed">{topic.description}</p>
-                                <div className="flex flex-wrap gap-2">
-                                    {topic.keyThemes.map((theme, i) => (
-                                        <span key={i} className="text-xs bg-white border border-gray-200 text-gray-500 px-2 py-1 rounded-md">
-                                            #{theme}
-                                        </span>
+                    <div className="space-y-8 animate-fade-in">
+                        {/* 1. Topics Report */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            {aiReport.map((topic, idx) => (
+                                <div key={idx} className="p-4 bg-gray-50 rounded-lg border border-gray-100 hover:border-purple-200 transition-colors">
+                                    <h4 className="font-bold text-gray-800 mb-2">{topic.mainTopic}</h4>
+                                    <p className="text-sm text-gray-600 mb-3 leading-relaxed">{topic.description}</p>
+                                    <div className="flex flex-wrap gap-2">
+                                        {topic.keyThemes.map((theme, i) => (
+                                            <span key={i} className="text-xs bg-white border border-gray-200 text-gray-500 px-2 py-1 rounded-md">
+                                                #{theme}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        
+                        {/* 2. Famous Personalities */}
+                        {personalities.length > 0 && (
+                            <div>
+                                <h4 className="text-md font-bold text-gray-800 mb-4 flex items-center">
+                                    <svg className="w-5 h-5 mr-2 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+                                    Famous Personalities Trending
+                                </h4>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                                    {personalities.map((person, idx) => (
+                                        <div key={idx} className="bg-white border border-gray-100 rounded-lg p-4 shadow-sm flex flex-col items-center text-center hover:shadow-md transition-shadow">
+                                            <div className="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center text-purple-600 font-bold text-lg mb-3">
+                                                {person.name.charAt(0)}
+                                            </div>
+                                            <h5 className="font-bold text-gray-900">{person.name}</h5>
+                                            <span className="text-xs text-gray-500 mb-2">{person.role}</span>
+                                            <p className="text-xs text-gray-600 italic mb-2">"{person.context}"</p>
+                                        </div>
                                     ))}
                                 </div>
                             </div>
-                        ))}
+                        )}
+
+                        {/* 3. Sentiment Analysis Timeline */}
+                        {sentimentTimeline.length > 0 && (
+                            <div>
+                                <h4 className="text-md font-bold text-gray-800 mb-4 flex items-center">
+                                    <svg className="w-5 h-5 mr-2 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" /></svg>
+                                    Sentiment Analysis Over Time
+                                </h4>
+                                <div className="bg-white border border-gray-100 rounded-lg p-6">
+                                    <div className="flex items-end space-x-2 sm:space-x-8 h-48">
+                                        {sentimentTimeline.map((point, idx) => (
+                                            <div key={idx} className="flex-1 flex flex-col h-full justify-end group relative min-w-[50px]">
+                                                {/* Tooltip */}
+                                                <div className="absolute bottom-full mb-2 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white text-xs rounded py-1 px-2 opacity-0 group-hover:opacity-100 transition-opacity z-10 w-32 text-center pointer-events-none">
+                                                    Pos: {point.positive}%<br/>Neu: {point.neutral}%<br/>Neg: {point.negative}%
+                                                </div>
+                                                
+                                                {/* Stacked Bar */}
+                                                <div className="w-full flex flex-col-reverse rounded-t-md overflow-hidden bg-gray-100 h-full relative">
+                                                     {/* Negative */}
+                                                    <div style={{height: `${point.negative}%`}} className="w-full bg-red-400 transition-all duration-1000"></div>
+                                                     {/* Neutral */}
+                                                    <div style={{height: `${point.neutral}%`}} className="w-full bg-gray-300 transition-all duration-1000"></div>
+                                                    {/* Positive */}
+                                                    <div style={{height: `${point.positive}%`}} className="w-full bg-green-400 transition-all duration-1000"></div>
+                                                </div>
+                                                <span className="text-xs text-gray-500 mt-3 text-center truncate w-full block">{point.timeLabel}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="flex justify-center mt-4 space-x-6 text-xs">
+                                        <div className="flex items-center"><span className="w-3 h-3 bg-green-400 rounded-sm mr-2"></span>Positive</div>
+                                        <div className="flex items-center"><span className="w-3 h-3 bg-gray-300 rounded-sm mr-2"></span>Neutral</div>
+                                        <div className="flex items-center"><span className="w-3 h-3 bg-red-400 rounded-sm mr-2"></span>Negative</div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                     </div>
                 ) : (
                     !loadingAi && (
                         <div className="text-center py-8 bg-gray-50 rounded-lg border border-dashed border-gray-200">
-                            <p className="text-gray-500 text-sm">Tap "Generate Report" to let Gemini analyze headlines for you.</p>
+                            <p className="text-gray-500 text-sm">Tap "Generate Report" to let Gemini analyze headlines, find personalities, and track sentiment.</p>
                         </div>
                     )
-                )}
-            </section>
-
-             {/* Recent Trends (Past 1 Hr) Section */}
-             <section className="mb-8">
-                <div className="flex items-center mb-4 space-x-2">
-                    <h3 className="text-lg font-bold text-gray-900">Trending Now (Past 1 Hr)</h3>
-                    <span className="relative flex h-3 w-3">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
-                    </span>
-                </div>
-                
-                {recentTrendTopics.length > 0 ? (
-                    <div className="flex flex-wrap gap-3">
-                        {recentTrendTopics.map((topic) => (
-                            <button
-                                key={`recent-${topic.keyword}`}
-                                onClick={() => setSelectedKeyword(topic.keyword === selectedKeyword ? null : topic.keyword)}
-                                className={`px-4 py-2 rounded-full text-sm font-medium transition-all border ${
-                                    selectedKeyword === topic.keyword
-                                        ? 'bg-red-600 text-white border-red-600 shadow-md transform scale-105'
-                                        : 'bg-red-50 text-red-700 border-red-100 hover:bg-red-100 hover:border-red-300'
-                                }`}
-                            >
-                                {topic.keyword}
-                                <span className={`ml-2 text-xs py-0.5 px-1.5 rounded-full ${
-                                    selectedKeyword === topic.keyword ? 'bg-red-500 text-white' : 'bg-white text-red-600 border border-red-200'
-                                }`}>
-                                    {topic.count}
-                                </span>
-                            </button>
-                        ))}
-                    </div>
-                ) : (
-                    <div className="p-4 bg-gray-50 rounded-lg border border-dashed border-gray-200 text-sm text-gray-500">
-                        No breaking trends detected in the last hour.
-                    </div>
                 )}
             </section>
 
